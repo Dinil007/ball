@@ -65,35 +65,35 @@ CricketGrip AI performs real-time cricket grip recognition through webcam-based 
 ### 🏏 Full Ball Grip Recognition & Live Coaching
 Demonstration of end-to-end bowling grip classification, live feature telemetry, dynamic coaching cues, and probability confidence meters.
 
-![Full Ball Grip Recognition](outputs/ball%20grip%20full.mp4)
+![Full Ball Grip Recognition](assets/demos/ball_grip_full.gif)
 
 ---
 
 ### 🎯 Hand & Ball Association Tracking
 Demonstration of real-time weighted fingertip (70%) and MCP joint (30%) distance calculation to associate the cricket ball with the active bowling hand.
 
-![Hand and Ball Association](outputs/ball%20and%20hand.mp4)
+![Hand and Ball Association](assets/demos/ball_and_hand.gif)
 
 ---
 
 ### ⚾ Individual Cricket Ball Detection
 Demonstration of the custom YOLOv8 detector localizing the cricket ball with high confidence under varied angles, lighting, and finger occlusion.
 
-![Individual Ball Detection](outputs/ball%20individual.mp4)
+![Individual Ball Detection](assets/demos/ball_individual.gif)
 
 ---
 
 ### 🖐️ 21 3D Hand Landmark & Orientation Detection
 Demonstration of MediaPipe 21 3D keypoint tracking, hierarchical One Euro temporal smoothing, and palm-vs-back orientation determination.
 
-![Hand Landmark Detection](outputs/hand%20detection.mp4)
+![Hand Landmark Detection](assets/demos/hand_detection.gif)
 
 ---
 
 ### 🛡️ False Positive Suppression & Gating
 Demonstration of intelligent orientation and proximity gating, preventing false classifications when hands are empty or in non-bowling postures.
 
-![False Positive Suppression](outputs/no%20false%20positive.mp4)
+![False Positive Suppression](assets/demos/no_false_positive.gif)
 
 ---
 
