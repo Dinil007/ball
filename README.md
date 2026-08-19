@@ -16,6 +16,7 @@
 
 - [Overview](#-overview)
 - [Key Features](#-key-features)
+- [Real-Time Demonstrations](#-real-time-demonstrations)
 - [System Architecture](#-system-architecture)
 - [AI & Vision Pipeline](#-ai--vision-pipeline)
 - [Technologies Used](#-technologies-used)
@@ -54,6 +55,45 @@ In cricket bowling, subtle finger adjustments on the seam and ball surface dicta
 - 🧠 **24-Feature Kinematic Extraction**: Captures joint angles, individual finger curls, fingertip spreads, ball distances, wrist rotation angles, and ball coverage ratios.
 - ⚡ **Random Forest Classification**: Classifies 5 cricket grips with probability mapping and 10-frame majority voting stabilization.
 - 📊 **Broadcast Coaching Dashboard**: 1080p fullscreen display separating the live camera stream from an analytics panel with confidence meters and dynamic coaching cues.
+
+---
+
+## 🎥 Real-Time Demonstrations
+
+CricketGrip AI performs real-time cricket grip recognition through webcam-based computer vision and machine learning. The following demonstrations show the system identifying different bowling grips in real time.
+
+### 🏏 Full Ball Grip Recognition & Live Coaching
+Demonstration of end-to-end bowling grip classification, live feature telemetry, dynamic coaching cues, and probability confidence meters.
+
+![Full Ball Grip Recognition](outputs/ball%20grip%20full.mp4)
+
+---
+
+### 🎯 Hand & Ball Association Tracking
+Demonstration of real-time weighted fingertip (70%) and MCP joint (30%) distance calculation to associate the cricket ball with the active bowling hand.
+
+![Hand and Ball Association](outputs/ball%20and%20hand.mp4)
+
+---
+
+### ⚾ Individual Cricket Ball Detection
+Demonstration of the custom YOLOv8 detector localizing the cricket ball with high confidence under varied angles, lighting, and finger occlusion.
+
+![Individual Ball Detection](outputs/ball%20individual.mp4)
+
+---
+
+### 🖐️ 21 3D Hand Landmark & Orientation Detection
+Demonstration of MediaPipe 21 3D keypoint tracking, hierarchical One Euro temporal smoothing, and palm-vs-back orientation determination.
+
+![Hand Landmark Detection](outputs/hand%20detection.mp4)
+
+---
+
+### 🛡️ False Positive Suppression & Gating
+Demonstration of intelligent orientation and proximity gating, preventing false classifications when hands are empty or in non-bowling postures.
+
+![False Positive Suppression](outputs/no%20false%20positive.mp4)
 
 ---
 
