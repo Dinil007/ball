@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 from collections import deque, Counter
 
 from camera.webcam import Webcam
@@ -8,7 +9,7 @@ from hand.landmark_smoother import LandmarkSmoother
 from hand.hand_orientation import HandOrientation
 from tracking.hand_ball_association import HandBallAssociation
 from features.feature_extractor import FeatureExtractor
-from classifier.grip_classifier import GripClassifier, evaluate_dataset_samples
+from classifier.grip_classifier import GripClassifier
 
 
 def get_smoothed_prediction(history_buffer):
@@ -17,16 +18,16 @@ def get_smoothed_prediction(history_buffer):
     and average confidence of the dominant class.
     """
     if not history_buffer:
-        return {"grip": "NONE", "raw_grip": "NONE", "confidence": 0.0, "probabilities": {}}
+        return {"grip": "NONE", "raw_grip": "NONE", "confidence": 0.0}
 
     # Extract all non-NONE valid frame predictions
     valid_predictions = [p for p in history_buffer if p["grip"] != "NONE"]
     if not valid_predictions:
-        return {"grip": "NONE", "raw_grip": "NONE", "confidence": 0.0, "probabilities": {}}
+        return {"grip": "NONE", "raw_grip": "NONE", "confidence": 0.0}
 
     # Majority voting over thresholded predictions
     grip_counts = Counter(p["grip"] for p in valid_predictions)
-    most_common_grip, count = grip_counts.most_common(1)[0]
+    most_common_grip, _ = grip_counts.most_common(1)[0]
 
     # Calculate average confidence for the dominant grip
     relevant_confs = [p["confidence"] for p in valid_predictions if p["grip"] == most_common_grip]
@@ -36,21 +37,202 @@ def get_smoothed_prediction(history_buffer):
     raw_counts = Counter(p.get("raw_grip", p["grip"]) for p in valid_predictions)
     most_common_raw, _ = raw_counts.most_common(1)[0]
 
-    # Use the latest probability distribution
-    latest_probs = valid_predictions[-1].get("probabilities", {})
-
     return {
         "grip": most_common_grip,
         "raw_grip": most_common_raw,
-        "confidence": round(avg_conf, 2),
-        "probabilities": latest_probs
+        "confidence": round(avg_conf, 2)
     }
 
 
-def main():
-    # ── Run direct dataset sample evaluation first for baseline comparison ───
-    evaluate_dataset_samples()
+def draw_coaching_dashboard(frame, hands_info, ball, holder, holder_conf, smoothed_result, active_hand_info):
+    """
+    Build a high-definition (1920x1080) fullscreen coaching dashboard.
+    - Left side: Camera feed scaled cleanly with aspect-ratio preservation.
+    - Right side: Professional multi-hand coaching analysis sidebar.
+    """
+    canvas_w = 1920
+    canvas_h = 1080
+    sidebar_w = 520
+    cam_area_w = canvas_w - sidebar_w  # 1400px
 
+    # Create full canvas with deep dark background
+    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    canvas[:, :] = (18, 15, 12)
+
+    # ── 1. Scale and Position Camera Feed (Left Section) ──────────────────────
+    cam_h, cam_w = frame.shape[:2]
+    scale = min(cam_area_w / cam_w, canvas_h / cam_h)
+    new_w = int(cam_w * scale)
+    new_h = int(cam_h * scale)
+
+    resized_cam = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    # Center camera frame inside the 1400x1080 left section
+    offset_x = (cam_area_w - new_w) // 2
+    offset_y = (canvas_h - new_h) // 2
+    canvas[offset_y:offset_y + new_h, offset_x:offset_x + new_w] = resized_cam
+
+    # Camera Live Feed Badge
+    cv2.rectangle(canvas, (offset_x + 20, offset_y + 20), (offset_x + 175, offset_y + 58), (24, 20, 16), -1)
+    cv2.rectangle(canvas, (offset_x + 20, offset_y + 20), (offset_x + 175, offset_y + 58), (55, 48, 40), 1)
+    cv2.circle(canvas, (offset_x + 40, offset_y + 39), 7, (0, 0, 255), -1)
+    cv2.putText(canvas, "LIVE CAMERA", (offset_x + 56, offset_y + 45),
+                cv2.FONT_HERSHEY_DUPLEX, 0.55, (240, 240, 240), 1, cv2.LINE_AA)
+
+    # ── 2. Right Side Coaching Analysis Panel ─────────────────────────────────
+    panel_x = cam_area_w
+    cv2.rectangle(canvas, (panel_x, 0), (canvas_w, canvas_h), (26, 22, 18), -1)  # Dark slate panel
+    cv2.line(canvas, (panel_x, 0), (panel_x, canvas_h), (48, 42, 35), 2)         # Vertical divider
+
+    # Header Banner Card
+    cv2.rectangle(canvas, (panel_x + 25, 30), (canvas_w - 25, 120), (38, 32, 26), -1)
+    cv2.rectangle(canvas, (panel_x + 25, 30), (canvas_w - 25, 120), (60, 52, 42), 1)
+    cv2.putText(canvas, "CRICKET GRIP ANALYSIS", (panel_x + 45, 72),
+                cv2.FONT_HERSHEY_DUPLEX, 0.85, (0, 215, 255), 2, cv2.LINE_AA)
+    cv2.putText(canvas, "AI Bowler Real-time Coaching System", (panel_x + 45, 102),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (170, 170, 170), 1, cv2.LINE_AA)
+
+    y_cursor = 145
+    card_bg = (34, 29, 24)
+    card_border = (55, 48, 40)
+
+    # ── Card 1: Multi-Hand Detection & Tracking ───────────────────────────────
+    num_hands = len(hands_info)
+    card1_h = 220 if num_hands >= 2 else 185
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card1_h), card_bg, -1)
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card1_h), card_border, 1)
+
+    cv2.putText(canvas, "HAND DETECTION", (panel_x + 45, y_cursor + 32),
+                cv2.FONT_HERSHEY_DUPLEX, 0.60, (0, 215, 255), 1, cv2.LINE_AA)
+
+    # Hands Detected count
+    cv2.putText(canvas, "Hands Detected:", (panel_x + 45, y_cursor + 66),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (210, 210, 210), 1, cv2.LINE_AA)
+    cv2.putText(canvas, str(num_hands), (panel_x + 235, y_cursor + 66),
+                cv2.FONT_HERSHEY_DUPLEX, 0.72, (0, 230, 115) if num_hands > 0 else (140, 140, 140), 2, cv2.LINE_AA)
+
+    # Individual Hand entries
+    sub_y = y_cursor + 100
+    if num_hands == 0:
+        cv2.putText(canvas, "No hands visible", (panel_x + 45, sub_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (140, 140, 140), 1, cv2.LINE_AA)
+    else:
+        for idx, h_info in enumerate(hands_info[:2]):
+            h_id = h_info.get("hand_id", idx + 1)
+            h_side = h_info["side"]
+            h_ori = h_info["orientation"]
+            h_col = (0, 230, 115) if h_ori == "BACK" else (0, 215, 255) if h_ori == "PALM" else (160, 160, 160)
+
+            # Highlight tag if this hand holds the ball
+            is_holder = (h_side == holder and holder != "NONE")
+            tag = "  [HOLDER]" if is_holder else ""
+
+            # Line e.g. "Hand 1: RIGHT  (BACK)"
+            cv2.putText(canvas, f"Hand {h_id}:", (panel_x + 45, sub_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.60, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(canvas, f"{h_side}", (panel_x + 135, sub_y),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.65, (240, 240, 240), 1, cv2.LINE_AA)
+            cv2.putText(canvas, f"{h_ori}{tag}", (panel_x + 245, sub_y),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.62, h_col, 2, cv2.LINE_AA)
+            sub_y += 34
+
+    # Ball and Holder Status line
+    holder_text = holder if holder != "NONE" else "NONE"
+    holder_col = (0, 230, 115) if holder != "NONE" else (140, 140, 140)
+
+    status_y = y_cursor + card1_h - 18
+    cv2.putText(canvas, f"Ball: {'DETECTED' if ball else 'NONE'}", (panel_x + 45, status_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 230, 115) if ball else (80, 80, 220), 1, cv2.LINE_AA)
+    cv2.putText(canvas, f"Ball Holder: {holder_text}", (panel_x + 235, status_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, holder_col, 1, cv2.LINE_AA)
+
+    y_cursor += card1_h + 25
+
+    # ── Card 2: Grip Identification (Hero Card) ───────────────────────────────
+    card2_h = 220
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card2_h), card_bg, -1)
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card2_h), card_border, 1)
+
+    cv2.putText(canvas, "IDENTIFIED GRIP", (panel_x + 45, y_cursor + 38),
+                cv2.FONT_HERSHEY_DUPLEX, 0.60, (0, 215, 255), 1, cv2.LINE_AA)
+
+    raw_grip = smoothed_result["grip"].upper()
+    conf_pct = int(smoothed_result["confidence"] * 100)
+
+    if raw_grip in ("NONE", ""):
+        grip_title = "Waiting..."
+        grip_col = (160, 160, 160)
+        conf_str = "--"
+    elif raw_grip == "UNCERTAIN":
+        grip_title = "UNCERTAIN"
+        grip_col = (0, 215, 255)  # Amber
+        conf_str = f"{conf_pct}%"
+    else:
+        grip_title = raw_grip.replace("_", " ")
+        grip_col = (0, 230, 115)  # Crisp coaching green
+        conf_str = f"{conf_pct}%"
+
+    # Display Grip Title
+    title_scale = 1.05 if len(grip_title) > 12 else 1.25
+    cv2.putText(canvas, grip_title, (panel_x + 45, y_cursor + 95),
+                cv2.FONT_HERSHEY_DUPLEX, title_scale, grip_col, 2, cv2.LINE_AA)
+
+    # Confidence Row
+    cv2.putText(canvas, "Confidence:", (panel_x + 45, y_cursor + 145),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.70, (210, 210, 210), 1, cv2.LINE_AA)
+    cv2.putText(canvas, conf_str, (panel_x + 220, y_cursor + 145),
+                cv2.FONT_HERSHEY_DUPLEX, 0.82, grip_col, 2, cv2.LINE_AA)
+
+    # Progress bar for confidence
+    bar_x = panel_x + 45
+    bar_y = y_cursor + 172
+    bar_w = sidebar_w - 90
+    bar_h = 16
+    cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (48, 42, 36), -1)
+    if conf_pct > 0 and raw_grip != "NONE":
+        fill_w = int((conf_pct / 100.0) * bar_w)
+        cv2.rectangle(canvas, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), grip_col, -1)
+
+    y_cursor += card2_h + 25
+
+    # ── Card 3: Coaching Guidance / Status ────────────────────────────────────
+    card3_h = 120
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card3_h), card_bg, -1)
+    cv2.rectangle(canvas, (panel_x + 25, y_cursor), (canvas_w - 25, y_cursor + card3_h), card_border, 1)
+
+    cv2.putText(canvas, "COACHING GUIDANCE", (panel_x + 45, y_cursor + 35),
+                cv2.FONT_HERSHEY_DUPLEX, 0.60, (0, 215, 255), 1, cv2.LINE_AA)
+
+    if not hands_info:
+        guide_text = "Position hand in camera"
+        guide_col = (160, 160, 160)
+    elif not ball:
+        guide_text = "Hold cricket ball in hand"
+        guide_col = (0, 215, 255)
+    elif holder == "NONE":
+        guide_text = "Bring ball closer to fingers"
+        guide_col = (0, 215, 255)
+    elif active_hand_info and active_hand_info["orientation"] == "PALM":
+        guide_text = f"Show back of {active_hand_info['side'].lower()} hand"
+        guide_col = (0, 215, 255)
+    elif raw_grip == "UNCERTAIN":
+        guide_text = "Adjust finger alignment on seam"
+        guide_col = (0, 215, 255)
+    else:
+        guide_text = "Grip locked & analyzed"
+        guide_col = (0, 230, 115)
+
+    cv2.putText(canvas, guide_text, (panel_x + 45, y_cursor + 80),
+                cv2.FONT_HERSHEY_DUPLEX, 0.68, guide_col, 1, cv2.LINE_AA)
+
+    # Footer note
+    cv2.putText(canvas, "Press 'Q' or 'ESC' to exit", (panel_x + 160, canvas_h - 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (130, 130, 130), 1, cv2.LINE_AA)
+
+    return canvas
+
+
+def main():
     webcam = Webcam(0)
 
     if not webcam.is_opened():
@@ -59,7 +241,6 @@ def main():
 
     ball_detector     = BallDetector()
     hand_detector     = HandDetector()
-    # Independent smoother per hand side to prevent filter-state corruption
     smoothers         = {"LEFT": LandmarkSmoother(), "RIGHT": LandmarkSmoother()}
     orientation_det   = HandOrientation()
     association       = HandBallAssociation()
@@ -69,17 +250,18 @@ def main():
     # 10-frame buffer for temporal prediction stabilization
     prediction_history = deque(maxlen=10)
 
+    window_name = "KhiladiPro - Cricket Grip AI Coach"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
     print("=" * 60)
-    print("    CricketGrip AI - Real-time Multi-Hand Engine")
+    print("    CricketGrip AI - Multi-Hand Fullscreen Coach")
     print("=" * 60)
-    print(f"Model Feature Columns Expected: {len(grip_classifier.feature_columns)}")
-    print(f"Confidence Threshold: {grip_classifier.confidence_threshold * 100:.0f}%")
-    print("Webcam started. Press Q to quit.\n")
+    print("Webcam started. Press Q or ESC in the window to quit.\n")
 
     frame_counter = 0
 
     while True:
-
         success, frame = webcam.read()
 
         if not success:
@@ -102,7 +284,6 @@ def main():
                 if side not in smoothers:
                     smoothers[side] = LandmarkSmoother()
                 hand["landmarks"] = smoothers[side].smooth(hand["landmarks"])
-            # Reset smoother for any side that disappeared this frame
             for side in list(smoothers.keys()):
                 if side not in active_sides:
                     smoothers[side].reset()
@@ -113,9 +294,10 @@ def main():
         # ── 3. Independent Per-Hand Orientation Calculation ───────────────────
         hands_info = []
         if hands:
-            for hand in hands:
+            for idx, hand in enumerate(hands):
                 ori_res = orientation_det.calculate(hand)
                 hands_info.append({
+                    "hand_id": idx + 1,
                     "side": hand.get("side", "UNKNOWN"),
                     "orientation": ori_res["orientation"],
                     "confidence": hand.get("confidence", 0.90),
@@ -136,8 +318,10 @@ def main():
         active_hand_info = None
 
         if hands_info:
-            # If a specific hand holds the ball, prioritize it; otherwise pick first hand
-            if holder in ("LEFT", "RIGHT"):
+            # If 1 hand, use that hand; if 2 hands, prioritize designated ball holder
+            if len(hands_info) == 1:
+                active_hand_info = hands_info[0]
+            elif holder in ("LEFT", "RIGHT"):
                 for h_info in hands_info:
                     if h_info["side"] == holder:
                         active_hand_info = h_info
@@ -162,7 +346,7 @@ def main():
             "alignment": {}
         }
 
-        # Gating: Evaluates strictly the active hand holding the ball
+        # Gating: strictly checks active hand holding the ball
         gating_passed = (
             active_hand_info is not None and
             active_hand_info["orientation"] == "BACK" and
@@ -180,157 +364,33 @@ def main():
         # Apply majority voting over the 10-frame buffer
         smoothed_result = get_smoothed_prediction(prediction_history)
 
-        # ── 7. Detailed Console Telemetry & Probabilities ─────────────────────
-        ball_status = "YES" if ball else "NO"
+        # ── 7. Clean Background Logging (every 30 frames) ─────────────────────
+        if hands_info and frame_counter % 30 == 0:
+            hand_statuses = [f"Hand {h['hand_id']} ({h['side']}: {h['orientation']})" for h in hands_info]
+            h_str = " | ".join(hand_statuses)
+            g_str = smoothed_result["grip"].upper()
+            c_val = int(smoothed_result["confidence"] * 100)
+            print(f"[Frame {frame_counter:04d}] {h_str} | Ball Holder: {holder} | Grip: {g_str} ({c_val}%)")
 
-        if hands_info:
-            ori_strs = " | ".join([f"[{h['side']}: {h['orientation']}]" for h in hands_info])
-            print("-" * 65)
-            print(f"[Frame {frame_counter:04d}] Hands: {len(hands_info)} ({ori_strs}) | Ball={ball_status} | Holder={holder} ({holder_conf*100:.0f}%) | Passed={gating_passed}")
-
-            if features and active_hand_info:
-                print(f"  Active Hand: {active_hand_info['side']} (Orientation: {active_hand_info['orientation']})")
-                print("  Kinematic Features:")
-                print(f"    wrist_rotation_angle   : {features.get('wrist_rotation_angle', 0.0):.2f}")
-                print(f"    thumb_angle            : {features.get('thumb_angle', 0.0):.2f}")
-                print(f"    index_curl             : {features.get('index_curl', 0.0):.2f}")
-                print(f"    middle_curl            : {features.get('middle_curl', 0.0):.2f}")
-                print(f"    ring_curl              : {features.get('ring_curl', 0.0):.2f}")
-                print(f"    pinky_curl             : {features.get('pinky_curl', 0.0):.2f}")
-                print(f"    index_middle_distance  : {features.get('index_middle_distance', 0.0):.4f}")
-                print(f"    ball_coverage_ratio    : {features.get('ball_coverage_ratio', 0.0)}")
-
-            if gating_passed and raw_pred.get("probabilities"):
-                print("  Prediction Probabilities:")
-                for cls_name, prob in raw_pred["probabilities"].items():
-                    bar = "#" * int(prob * 20)
-                    print(f"    - {cls_name:15s}: {prob * 100:5.1f}%  {bar}")
-
-                print(f"  --> Raw Result     : {raw_pred.get('raw_grip', 'NONE').upper()} ({raw_pred.get('confidence', 0.0)*100:.1f}%)")
-                print(f"  --> Smoothed (10f) : {smoothed_result['grip'].upper()} ({smoothed_result['confidence']*100:.1f}%)")
-
-        # ── 8. Draw Ball & Landmarks ──────────────────────────────────────────
+        # ── 8. Draw Ball & Landmarks on Camera Frame ──────────────────────────
         frame = ball_detector.draw(frame, ball)
         frame = hand_detector.draw_landmarks(frame)
 
-        # ── 9. On-screen Multi-Hand Debug & Telemetry HUD ─────────────────────
-        y = 26
-        lh = 22
+        # ── 9. Render Fullscreen Dashboard ────────────────────────────────────
+        dashboard = draw_coaching_dashboard(
+            frame,
+            hands_info,
+            ball,
+            holder,
+            holder_conf,
+            smoothed_result,
+            active_hand_info
+        )
 
-        # Hands Count
-        cv2.putText(frame, f"Hands detected: {len(hands_info)}", (12, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 255, 0) if hands_info else (0, 0, 255), 2)
-        y += lh
-
-        # Separate Per-Hand Orientation Breakdown
-        if hands_info:
-            for h_info in hands_info:
-                h_side = h_info["side"]
-                h_ori = h_info["orientation"]
-                h_col = (0, 255, 255) if h_ori == "PALM" else \
-                        (0, 165, 255) if h_ori == "BACK" else (180, 180, 180)
-
-                holder_tag = " [HOLDER]" if h_side == holder else ""
-                cv2.putText(frame, f"{h_side} HAND: {h_ori}{holder_tag}", (12, y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.58, h_col, 2)
-                y += lh
-        else:
-            cv2.putText(frame, "No hands detected", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 2)
-            y += lh
-
-        # Ball Detection & Holder Status
-        b_col = (0, 255, 0) if ball else (0, 0, 255)
-        cv2.putText(frame, f"Ball: {'YES' if ball else 'NO'}", (12, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, b_col, 2)
-        y += lh
-
-        if holder != "NONE":
-            cv2.putText(frame, f"Holder: {holder} ({holder_conf * 100:.0f}%)", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "Holder: NONE", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, (150, 150, 150), 2)
-        y += lh + 4
-
-        # Final Smoothed Grip Prediction Box
-        grip_name = smoothed_result["grip"].upper()
-        conf_val = smoothed_result["confidence"] * 100
-
-        if grip_name == "UNCERTAIN":
-            cv2.putText(frame, "Grip: UNCERTAIN (<60%)", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.78, (0, 165, 255), 2)
-            y += lh
-            cv2.putText(frame, f"Confidence: {conf_val:.0f}%", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 165, 255), 2)
-        elif grip_name != "NONE":
-            cv2.putText(frame, f"Grip: {grip_name}", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.82, (0, 255, 0), 2)
-            y += lh
-            cv2.putText(frame, f"Confidence: {conf_val:.0f}%", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 255, 255), 2)
-        else:
-            if not hands_info:
-                reason = "No hand"
-            elif not ball or holder == "NONE":
-                reason = "No ball in hand"
-            elif active_hand_info and active_hand_info["orientation"] == "PALM":
-                reason = f"{active_hand_info['side']} in Palm view"
-            else:
-                reason = "Waiting for grip"
-            cv2.putText(frame, f"Grip: NONE ({reason})", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.68, (0, 0, 255), 2)
-        y += lh + 4
-
-        # Probability Distribution on HUD
-        probs = raw_pred.get("probabilities", {})
-        if probs:
-            cv2.putText(frame, "-- PROBABILITIES --", (12, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 0), 1)
-            y += 18
-            for cls_name, prob in probs.items():
-                p_text = f"{cls_name}: {prob*100:.0f}%"
-                cv2.putText(frame, p_text, (12, y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.46, (220, 220, 220), 1)
-                y += 16
-
-        # Right Panel: Kinematic Telemetry
-        if features and active_hand_info:
-            fx = frame_width - 295
-            fy = 24
-            cv2.putText(frame, f"=== KINEMATICS ({active_hand_info['side']}) ===", (fx, fy),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 0), 1)
-            fy += 18
-
-            rot_angle = features.get('wrist_rotation_angle', 0.0)
-            rot_tag = "Outward" if rot_angle > -70 else "Inward"
-
-            feature_lines = [
-                f"Wrist rot : {rot_angle:.1f} ({rot_tag})",
-                f"Thumb curl: {features.get('thumb_angle', 0.0):.1f}",
-                f"Index curl: {features.get('index_curl', 0.0):.1f}",
-                f"Mid curl  : {features.get('middle_curl', 0.0):.1f}",
-                f"Ring curl : {features.get('ring_curl', 0.0):.1f}",
-                f"Pinky curl: {features.get('pinky_curl', 0.0):.1f}",
-                f"Idx-Mid   : {features.get('index_middle_distance', 0.0):.3f}",
-            ]
-
-            if features.get("ball_index_distance") is not None:
-                feature_lines += [
-                    f"Ball-Idx  : {features.get('ball_index_distance', 0.0):.3f}",
-                    f"Ball-Mid  : {features.get('ball_middle_distance', 0.0):.3f}",
-                    f"Coverage  : {features.get('ball_coverage_ratio', 0.0):.3f}",
-                ]
-
-            for line in feature_lines:
-                cv2.putText(frame, line, (fx, fy),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 0), 1)
-                fy += 17
-
-        cv2.imshow("KhiladiPro - Cricket Grip AI (Multi-Hand)", frame)
+        cv2.imshow(window_name, dashboard)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
+        if key == ord("q") or key == 27:
             break
 
     webcam.release()
