@@ -1,0 +1,7 @@
+path: D:/khiladipro/data/ball_data
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['cricket_ball']
